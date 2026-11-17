@@ -1,0 +1,46 @@
+name: Bot Goals (daily)
+
+on:
+  schedule:
+    # Her gün 03:50 UTC (Sofia 05:50 / 06:50) — dünün bot goal'leri
+    - cron: "50 3 * * *"
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Başlangıç tarihi (YYYY-MM-DD) — boşsa dün. Sadece API denemesi için: probe"
+        required: false
+        default: ""
+      end_date:
+        description: "Bitiş tarihi (YYYY-MM-DD) — geriye dönük doldurma için, boş olabilir"
+        required: false
+        default: ""
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests pytz google-api-python-client google-auth
+
+      - name: Run bot_goals
+        env:
+          COMM100_SITE_ID: ${{ secrets.COMM100_SITE_ID }}
+          COMM100_API_KEY: ${{ secrets.COMM100_API_KEY }}
+          COMM100_EMAIL: ${{ secrets.COMM100_EMAIL }}
+          GOALS_SPREADSHEET_ID: ${{ secrets.GOALS_SPREADSHEET_ID }}
+          MANUAL_SPREADSHEET_ID: ${{ secrets.MANUAL_SPREADSHEET_ID }}
+          MEMBER_TAGS_SPREADSHEET_ID: ${{ secrets.MEMBER_TAGS_SPREADSHEET_ID }}
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          REPORT_EMAILS: ${{ secrets.REPORT_EMAILS }}
+          START_DATE: ${{ github.event.inputs.start_date }}
+          END_DATE: ${{ github.event.inputs.end_date }}
+        run: python scripts/bot_goals.py $START_DATE $END_DATE
