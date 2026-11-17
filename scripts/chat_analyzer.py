@@ -440,7 +440,7 @@ def try_gemini(prompt):
                             {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
                             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
                         ]
-                    }, timeout=60
+                    }, timeout=180
                 )
                 if r.status_code in [429, 503]:
                     print(f"[GEMINI] {model} key#{ki}: HTTP {r.status_code} (rate limit/kullanılamıyor)")
@@ -462,6 +462,11 @@ def try_gemini(prompt):
                         print(f"[GEMINI] {model} key#{ki}: HTTP 200 ama candidate boş döndü")
                 else:
                     print(f"[GEMINI] {model} key#{ki}: HTTP {r.status_code}: {r.text[:200]}")
+            except requests.exceptions.Timeout as e:
+                # Uzun prompt yüzünden yavaş yanıt anahtardan bağımsız — kalan anahtar/modelleri
+                # denemek dakikalarca boşa gider; doğrudan sıradaki AI'a (Claude/Groq) geç.
+                print(f"[GEMINI] {model} key#{ki}: zaman aşımı, sıradaki AI'a geçiliyor ({e.__class__.__name__})")
+                return {"success": False}
             except Exception as e:
                 print(f"[GEMINI] {model} key#{ki}: {e}")
     return {"success": False}
