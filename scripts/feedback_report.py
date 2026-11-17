@@ -292,7 +292,7 @@ def try_gemini(prompt):
                             {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
                             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
                         ]
-                    }, timeout=60
+                    }, timeout=180
                 )
                 if r.status_code in [429, 503]:
                     break
@@ -310,6 +310,11 @@ def try_gemini(prompt):
                         print(f"[AI] {model_name} | {in_t}+{out_t} token | ${cost:.6f}")
                         return {"success": True, "text": text, "model": model_name,
                                 "in_tokens": in_t, "out_tokens": out_t, "cost": cost}
+            except requests.exceptions.Timeout as e:
+                # Yavaş yanıt anahtardan bağımsız (uzun prompt) — kalan anahtarları denemek
+                # dakikalarca boşa gider; doğrudan sıradaki AI'a (Claude/Groq) geç.
+                print(f"[GEMINI] {model} key#{ki}: zaman aşımı, sıradaki AI'a geçiliyor ({e.__class__.__name__})")
+                return {"success": False}
             except Exception as e:
                 print(f"[GEMINI] {model} key#{ki}: {e}")
     return {"success": False}
