@@ -1,0 +1,44 @@
+name: Daily PPTX Report
+
+on:
+  schedule:
+    # 01:48 UTC = 04:48 Europe/Sofia (summer, UTC+3) / 03:48 (winter, UTC+2)
+    # NOT (16 Eki 2026): 77 dk geri çekildi (eski: 03:05 UTC = 06:05 Sofya yaz).
+    # NOT (8 Eki 2026): 1.5 saat geri çekildi (eski: 04:35 UTC = 07:35 Sofya yaz).
+    # v9 Daily Report (GAS) 07:30 Sofya'da çalışıyor — aralarında bağımlılık yok,
+    # bu workflow artık ondan önce çalışır. Dakika 48: yuvarlak dakikalardan
+    # (00/15/30/45) kaçınmak için (GitHub Actions gecikme yoğunluğu).
+    - cron: "48 1 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Date to report on (YYYY-MM-DD). Leave empty for 'yesterday'."
+        required: false
+        default: ""
+
+jobs:
+  build-and-send:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pptx-report   # <- adjust to wherever this folder lives in the repo
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build and send report
+        env:
+          MR_SITE_ID: ${{ secrets.MR_SITE_ID }}
+          MR_API_KEY: ${{ secrets.MR_API_KEY }}
+          MR_EMAIL: ${{ secrets.MR_EMAIL }}
+          MR_CS_DEPT: ${{ secrets.MR_CS_DEPT }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: python3 main.py "${{ github.event.inputs.date }}"

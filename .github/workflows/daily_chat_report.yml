@@ -1,0 +1,84 @@
+name: Poligon Chat Analyzer
+on:
+  schedule:
+    # Sofya 03:08 (birincil) — yaz saati (UTC+3, Nis-Eki yaklaşık): 00:08 UTC
+    # NOT (16 Eki 2026): tüm tetikleyiciler 77 dk geri çekildi
+    # (04:25 -> 03:08 / 05:25 -> 04:08). Dakika 08: yuvarlak dakikalardan
+    # (00/15/30/45) kaçınma kuralı korundu — GitHub Actions bu dakikalarda
+    # yoğunluk yüzünden scheduled run'ları saatlerce geciktirebiliyor.
+    - cron: '8 0 * 4-10 *'
+    # Sofya 04:08 (yedek/retry) — yaz saati: 01:08 UTC
+    - cron: '8 1 * 4-10 *'
+    # Sofya 03:08 (birincil) — kış saati (UTC+2, Kas-Mar yaklaşık): 01:08 UTC
+    - cron: '8 1 * 11,12,1,2,3 *'
+    # Sofya 04:08 (yedek/retry) — kış saati: 02:08 UTC
+    - cron: '8 2 * 11,12,1,2,3 *'
+  workflow_dispatch:        # Manuel çalıştırma butonu — her zaman çalışır, atlanmaz
+permissions:
+  contents: read
+  actions: read            # gh run list için gerekli
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - name: Bugün zaten başarılı bir run var mı kontrol et
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # DÜZELTME (4 Eyl 2026): bu job'da actions/checkout YOK, yani
+          # çalışma dizininde .git yok — GH_REPO olmadan `gh run list`
+          # hangi repo'da olduğunu bulamıyor ("not a git repository"
+          # hatasıyla başarısız oluyordu, run #88'de görüldü).
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "Manuel tetikleme — doğrudan çalışacak."
+            exit 0
+          fi
+          TODAY_SOFIA=$(TZ="Europe/Sofia" date +%F)
+          LATEST_SUCCESS_AT=$(gh run list \
+            --workflow "${{ github.workflow }}" \
+            --status success \
+            --event schedule \
+            --limit 5 \
+            --json createdAt \
+            --jq '.[0].createdAt // empty')
+          if [ -n "$LATEST_SUCCESS_AT" ]; then
+            LATEST_SUCCESS_SOFIA_DATE=$(TZ="Europe/Sofia" date -d "$LATEST_SUCCESS_AT" +%F)
+            if [ "$LATEST_SUCCESS_SOFIA_DATE" = "$TODAY_SOFIA" ]; then
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              echo "Bugün ($TODAY_SOFIA) zaten başarılı bir run var ($LATEST_SUCCESS_AT) — bu tetikleme atlanıyor."
+              exit 0
+            fi
+          fi
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "Bugün ($TODAY_SOFIA) henüz başarılı run yok — çalışacak."
+  analyze:
+    needs: check
+    if: needs.check.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Python kurulum
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Bağımlılıkları kur
+        run: pip install requests pytz openpyxl
+      - name: Chat Analyzer çalıştır
+        env:
+          COMM100_SITE_ID:    ${{ secrets.COMM100_SITE_ID }}
+          COMM100_API_KEY:    ${{ secrets.COMM100_API_KEY }}
+          COMM100_EMAIL:      ${{ secrets.COMM100_EMAIL }}
+          GEMINI_KEYS:        ${{ secrets.GEMINI_KEYS }}
+          CLAUDE_KEY:         ${{ secrets.CLAUDE_KEY }}
+          GROQ_KEYS:          ${{ secrets.GROQ_KEYS }}
+          GMAIL_USER:         ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          REPORT_EMAILS:      ${{ secrets.REPORT_EMAILS }}
+        run: python scripts/chat_analyzer.py

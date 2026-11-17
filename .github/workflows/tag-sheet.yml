@@ -1,0 +1,65 @@
+name: Tag Sheet — Wrap-up tag sayımları
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'calibrate = karşılaştırma testi | fill = ay(ları) yaz | summary = biten ayları yıllık özete ekle | top10 = Top 10 bloğunu doğru satıra yeniden yaz | daily = dünün ayını yenile'
+        required: true
+        default: 'calibrate'
+        type: choice
+        options:
+          - calibrate
+          - fill
+          - summary
+          - top10
+          - daily
+      months:
+        description: 'calibrate için tek ay (2026-04), fill/top10 için virgülle çoklu ay (2026-05,2026-06)'
+        required: false
+        default: '2026-04'
+      variant:
+        description: 'Sayım varyantı (calibrate sonucundaki en iyi varyant)'
+        required: false
+        default: 'A_dur'
+        type: choice
+        options:
+          - A_dur
+          - B_dur_cs
+          - C_dur_agent
+          - D_dur_agent_cs
+          - E_nofilter
+  # Her gün: dünün ayını yeniler (ayın ilk 3 günü önceki ayı da). 03:17 UTC = Sofya 05:17 (kış) / 06:17 (yaz).
+  # Yuvarlak dakikadan kaçınıldı; gecikme olursa sorun değil, işlem idempotent.
+  schedule:
+    - cron: '17 3 * * *'
+permissions:
+  contents: read
+jobs:
+  tag-sheet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Python kurulum
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Bağımlılıkları kur
+        run: pip install requests pytz google-auth google-auth-httplib2 google-api-python-client
+      - name: Tag sheet çalıştır
+        env:
+          COMM100_SITE_ID:     ${{ secrets.COMM100_SITE_ID }}
+          COMM100_API_KEY:     ${{ secrets.COMM100_API_KEY }}
+          COMM100_EMAIL:       ${{ secrets.COMM100_EMAIL }}
+          TAGS_SPREADSHEET_ID: ${{ secrets.TAGS_SPREADSHEET_ID }}
+          GCP_CREDENTIALS:     ${{ secrets.GCP_CREDENTIALS }}
+          TAG_VARIANT:         ${{ inputs.variant || 'A_dur' }}
+          MODE:                ${{ inputs.mode || 'daily' }}
+          MONTHS:              ${{ inputs.months || '' }}
+        run: |
+          if [ "$MODE" = "daily" ]; then
+            python scripts/tag_sheet.py daily
+          else
+            python scripts/tag_sheet.py "$MODE" "$MONTHS"
+          fi

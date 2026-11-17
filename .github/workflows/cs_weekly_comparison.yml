@@ -1,0 +1,56 @@
+name: CS Weekly Comparison
+
+on:
+  schedule:
+    # Her Pazartesi 05:00 UTC (Sofia kış 07:00 / yaz 08:00) — bot_goals (03:50) ve member_tags (03:30) bittikten sonra
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      args:
+        description: "Boş = geçen hafta | YYYY-MM-DD = o tarihin haftası | calibrate YYYY-MM-DD = API'yi şablonla karşılaştır"
+        required: false
+        default: ""
+      mail_mode:
+        description: "Mail: all (herkese) | me (sadece sana) | none (atma, sadece dosya)"
+        required: false
+        default: "me"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests pytz openpyxl pillow google-api-python-client google-auth
+
+      - name: Run cs_weekly_comparison
+        env:
+          COMM100_SITE_ID: ${{ secrets.COMM100_SITE_ID }}
+          COMM100_API_KEY: ${{ secrets.COMM100_API_KEY }}
+          COMM100_EMAIL: ${{ secrets.COMM100_EMAIL }}
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+          MEMBER_TAGS_SPREADSHEET_ID: ${{ secrets.MEMBER_TAGS_SPREADSHEET_ID }}
+          GOALS_SPREADSHEET_ID: ${{ secrets.GOALS_SPREADSHEET_ID }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          REPORT_EMAILS: ${{ secrets.REPORT_EMAILS }}
+          WEEKLY_REPORT_EMAILS: ${{ secrets.WEEKLY_REPORT_EMAILS }}   # opsiyonel; boşsa REPORT_EMAILS kullanılır
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}             # opsiyonel; boşsa Drive'a yüklenmez
+          WEEKLY_DEPT_MODE: cs                                        # cs | cs_vip | all  (calibrate ile doğrula)
+          MAIL_MODE: ${{ github.event.inputs.mail_mode || 'all' }}
+          RUN_ARGS: ${{ github.event.inputs.args }}
+        run: python scripts/cs_weekly_comparison.py $RUN_ARGS
+
+      - name: Dosyayı artifact olarak sakla
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cs_weekly_comparison
+          path: out/*.xlsx
+          if-no-files-found: ignore

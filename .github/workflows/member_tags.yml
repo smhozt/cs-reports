@@ -1,0 +1,45 @@
+name: Member Tags (daily)
+
+on:
+  schedule:
+    # Her gün 03:30 UTC (Sofia 05:30 / 06:30) — dünün chatleri
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Başlangıç tarihi (YYYY-MM-DD) — boşsa dün. Biçimi onarmak için: fix-format"
+        required: false
+        default: ""
+      end_date:
+        description: "Bitiş tarihi (YYYY-MM-DD) — geriye dönük doldurma için, boş olabilir"
+        required: false
+        default: ""
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests pytz google-api-python-client google-auth
+
+      - name: Run member_tags
+        env:
+          COMM100_SITE_ID: ${{ secrets.COMM100_SITE_ID }}
+          COMM100_API_KEY: ${{ secrets.COMM100_API_KEY }}
+          COMM100_EMAIL: ${{ secrets.COMM100_EMAIL }}
+          MEMBER_TAGS_SPREADSHEET_ID: ${{ secrets.MEMBER_TAGS_SPREADSHEET_ID }}
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          REPORT_EMAILS: ${{ secrets.REPORT_EMAILS }}
+          START_DATE: ${{ github.event.inputs.start_date }}
+          END_DATE: ${{ github.event.inputs.end_date }}
+          LOOKBACK_DAYS: "2"   # boş tarihte dün + önceki 2 gün yeniden çekilir (eksik/geç günleri kapatır)
+        run: python scripts/member_tags.py $START_DATE $END_DATE
