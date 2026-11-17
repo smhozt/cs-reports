@@ -1,0 +1,480 @@
+"""
+build_pptx.py
+Fills template.pptx with a metrics dict (as produced by fetch_metrics.build_metrics)
+and produces the final daily deck.
+
+All 7 content slides (2-8) are now fully data-driven — no more "N/A"
+placeholders except Slide 3's First Response Time and Slide 4's chatbot
+Action usage/per chat, which need separate data sources not yet wired in.
+"""
+import io
+import copy
+from pptx import Presentation
+from pptx.util import Inches, Pt, Emu
+from pptx.dml.color import RGBColor
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.text import PP_ALIGN
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+BRAND_COLORS = {
+    "superbetin": "#2A3990",
+    "betsat": "#F2C230",
+    "turkbet": "#D71920",
+}
+BRAND_LABELS = {"superbetin": "Superbetin", "betsat": "Betsat", "turkbet": "Turkbet"}
+
+
+# ============================================================
+# FORMATTING HELPERS (mirror the GAS _mrFmt* helpers)
+# ============================================================
+def fmt_time(seconds):
+    if not seconds or seconds <= 0:
+        return "—"
+    seconds = round(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def fmt_min_sec(seconds):
+    """'1m 32s' style, matching the original deck's wording."""
+    if not seconds or seconds <= 0:
+        return "0s"
+    seconds = round(seconds)
+    m, s = divmod(seconds, 60)
+    return f"{m}m {s}s" if m > 0 else f"{s}s"
+
+
+def fmt_pct(value):
+    if value is None:
+        return "—"
+    return f"{value:.2f}".replace(".", ",")
+
+
+def fmt_n(n):
+    return f"{round(n):,}".replace(",", ".")
+
+
+# ============================================================
+# TEXT REPLACEMENT (token -> value, run-level exact match)
+# ============================================================
+def replace_all_tokens(prs, tokens):
+    for slide in prs.slides:
+        _replace_in_shapes(slide.shapes, tokens)
+
+
+def _replace_in_shapes(shapes, tokens):
+    for shape in shapes:
+        if shape.has_text_frame:
+            for para in shape.text_frame.paragraphs:
+                for run in para.runs:
+                    for token, value in tokens.items():
+                        if token in run.text:
+                            run.text = run.text.replace(token, str(value))
+        if getattr(shape, "shape_type", None) is not None and shape.shape_type == 6:  # GROUP
+            _replace_in_shapes(shape.shapes, tokens)
+
+
+# ============================================================
+# CHART GENERATION (matplotlib -> in-memory PNG)
+# ============================================================
+def _save_png(fig, width_in, height_in):
+    """KRİTİK: figür zaten doğru width_in x height_in ile oluşturulmuş
+    olmalı (plt.subplots(figsize=(...))). Burada bbox_inches='tight'
+    KULLANMIYORUZ — çünkü o, içeriğe göre kırpma yapıp PNG'nin gerçek
+    piksel oranını figsize'dan saptırıyor, bu da PowerPoint'te görseli
+    slayt kutusuna sığdırırken dikey gerilip metnin "şişmiş/büyük"
+    görünmesine sebep oluyordu. Sabit boyutla kaydedince oran birebir
+    korunuyor, hiç gerilme olmuyor."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def build_hourly_volume_chart(hourly_dist, title="Chats by Hour", figsize=(10.63, 3.57), served_color="#2E6DA4"):
+    """Served (marka rengi ya da genel mavi) + Missed (kırmızı, üstte stack)
+    bar + Acceptance Rate (yeşil çizgi, ikincil eksen)."""
+    hours = [f'{h["hour"]:02d}:00' for h in hourly_dist]
+    served = [h.get("served", 0) for h in hourly_dist]
+    missed = [h.get("missed", 0) for h in hourly_dist]
+    acc = [h.get("acceptancePct", 0) for h in hourly_dist]
+
+    fig, ax1 = plt.subplots(figsize=figsize)
+    ax1.bar(hours, served, color=served_color, label="Served")
+    ax1.bar(hours, missed, bottom=served, color="#D9534F", label="Missed")
+    ax1.set_ylabel("Chats", fontsize=8)
+    ax1.tick_params(axis="x", rotation=90, labelsize=6)
+    ax1.tick_params(axis="y", labelsize=7)
+
+    ax2 = ax1.twinx()
+    ax2.plot(hours, acc, color="#5CB85C", marker="o", markersize=2.5, linewidth=1.2, label="Acceptance %")
+    ax2.set_ylim(0, 105)
+    ax2.set_ylabel("Acceptance %", fontsize=8)
+    ax2.tick_params(axis="y", labelsize=7)
+
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper left", fontsize=6.5)
+    ax1.set_title(title, fontsize=10)
+    fig.tight_layout(pad=0.6)
+    return _save_png(fig, *figsize)
+
+
+def build_brand_tag_donuts(brand_tag_map, figsize=(11.10, 2.98)):
+    """Slide 8 — 3 marka için ayrı donut (orijinal deck'teki gibi).
+    En fazla 6 tag + "Diğer" grubu, dikey alanı verimli kullanan büyük
+    donut + okunabilir legend."""
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
+    order = ["betsat", "superbetin", "turkbet"]  # orijinal deck'teki soldan sağa sıralama
+    max_slices = 6
+    for ax, brand in zip(axes, order):
+        tags = brand_tag_map.get(brand, [])
+        if not tags:
+            ax.axis("off")
+            continue
+        top = tags[:max_slices]
+        rest_sum = sum(c for _, c in tags[max_slices:])
+        labels = [t[0] for t in top]
+        values = [t[1] for t in top]
+        if rest_sum > 0:
+            labels.append("Diğer")
+            values.append(rest_sum)
+        ax.pie(values, wedgeprops=dict(width=0.42), startangle=90, radius=1.25,
+               colors=plt.cm.tab20.colors[:len(values)])
+        ax.set_title(BRAND_LABELS[brand], fontsize=11, pad=6, fontweight="bold")
+        ax.legend(labels, loc="center left", bbox_to_anchor=(0.88, 0.5),
+                  fontsize=6.5, frameon=False, labelspacing=0.4, handlelength=1, handletextpad=0.4)
+    # tight_layout yerine subplots_adjust: kenar boşluklarını elle sıfıra
+    # yakın tutup donut+legend'ın figürün NEREDEYSE TAMAMINI doldurmasını
+    # sağlıyoruz (önceki halde büyük beyaz boşluk kalıyordu).
+    # sağ marj 0.99'dan 0.85'e çekildi: en sağdaki (Turkbet) subplot'un legend'ı
+    # figürün kendi sınırını aşıp kesiliyordu (uzun tag isimlerinde doğrulandı,
+    # bkz. check_overflow.py) — artık her durumda güvenli marj bırakıyor.
+    fig.subplots_adjust(left=0.01, right=0.85, top=0.84, bottom=0.03, wspace=0.55)
+    return _save_png(fig, *figsize)
+
+
+def build_top_tags_chart(top_tags, figsize=(11.10, 2.98)):
+    """Genel (tüm markalar birleşik) Top 10 tag bar grafiği — artık
+    build_brand_tag_donuts ile değiştirildiği için slide 8'de kullanılmıyor,
+    ama başka bir yerde ihtiyaç olursa diye tutuluyor."""
+    tags = [t[0] for t in top_tags][::-1]
+    counts = [t[1] for t in top_tags][::-1]
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.barh(tags, counts, color="#2E6DA4")
+    ax.set_title("Top 10 Chat Tags", fontsize=10)
+    ax.tick_params(axis="both", labelsize=7)
+    for i, v in enumerate(counts):
+        ax.text(v, i, f" {v}", va="center", fontsize=7)
+    fig.tight_layout(pad=0.6)
+    return _save_png(fig, *figsize)
+
+
+def build_chatbot_chart(bot_only, bot_to_agent, figsize=(10.67, 3.67)):
+    """Slide 4 — simple bot-only vs bot-to-agent comparison bar."""
+    fig, ax = plt.subplots(figsize=figsize)
+    labels = ["Chatbot Only", "Bot \u2192 Agent"]
+    values = [bot_only, bot_to_agent]
+    ax.bar(labels, values, color=["#F2A93B", "#2E6DA4"], width=0.5)
+    for i, v in enumerate(values):
+        ax.text(i, v, fmt_n(v), ha="center", va="bottom", fontsize=9)
+    ax.set_title("Chatbot Volume", fontsize=10)
+    ax.tick_params(axis="both", labelsize=8)
+    fig.tight_layout(pad=0.6)
+    return _save_png(fig, *figsize)
+
+
+# ============================================================
+# IMAGE PLACEMENT (delete old screenshot, insert new chart at same box)
+# ============================================================
+def replace_picture(slide, shape_name, png_stream, left_in, top_in, width_in, height_in):
+    target = None
+    for shape in slide.shapes:
+        if shape.name == shape_name:
+            target = shape
+            break
+    if target is not None:
+        target._element.getparent().remove(target._element)
+    slide.shapes.add_picture(png_stream, Inches(left_in), Inches(top_in),
+                              width=Inches(width_in), height=Inches(height_in))
+
+
+# ============================================================
+# SLIDE 2 — KPI kartları (Total Chats / Success / Missed).
+# Eski "- Total Chats: X" madde işaretli listesinin yerine geçiyor,
+# öneri #2: renkli, büyük rakamlı özet kartlar.
+# ============================================================
+def add_kpi_card(slide, x_in, y_in, w_in, h_in, value, label, accent_hex):
+    # Kart gövdesi: nötr açık gri, köşeler hafif yuvarlak
+    shp = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x_in), Inches(y_in), Inches(w_in), Inches(h_in))
+    shp.adjustments[0] = 0.10
+    shp.fill.solid()
+    shp.fill.fore_color.rgb = RGBColor.from_string("F4F5F7")
+    shp.line.fill.background()
+    shp.shadow.inherit = False
+
+    # Sol renkli şerit (accent border) — ayrı, dar bir dikdörtgen
+    strip = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x_in), Inches(y_in), Inches(0.06), Inches(h_in))
+    strip.fill.solid()
+    strip.fill.fore_color.rgb = RGBColor.from_string(accent_hex)
+    strip.line.fill.background()
+    strip.shadow.inherit = False
+
+    tf = shp.text_frame
+    tf.word_wrap = True
+    tf.margin_left = Inches(0.10)
+    tf.margin_right = Inches(0.06)
+    tf.margin_top = Inches(0.08)
+    tf.margin_bottom = Inches(0.08)
+
+    p_val = tf.paragraphs[0]
+    p_val.alignment = PP_ALIGN.CENTER
+    r_val = p_val.add_run()
+    r_val.text = value
+    r_val.font.size = Pt(20)
+    r_val.font.bold = True
+    r_val.font.color.rgb = RGBColor.from_string("1A1A1A")
+
+    p_lbl = tf.add_paragraph()
+    p_lbl.alignment = PP_ALIGN.CENTER
+    r_lbl = p_lbl.add_run()
+    r_lbl.text = label
+    r_lbl.font.size = Pt(9)
+    r_lbl.font.color.rgb = RGBColor.from_string("7A7A76")
+    return shp
+
+
+def add_slide2_kpi_cards(slide, m):
+    cards = [
+        (fmt_n(m["totalChats"]), "Total Chats", "1B2436"),
+        (fmt_pct(m["acceptancePct"]) + "%", "Success", "2E7D32"),
+        (fmt_n(m["missed"]), "Missed", "B23A32"),
+    ]
+    x, w = 10.75, 2.47
+    y, h, gap = 1.52, 1.0, 0.15
+    for value, label, accent in cards:
+        add_kpi_card(slide, x, y, w, h, value, label, accent)
+        y += h + gap
+
+
+# ============================================================
+# SLIDE 9 — "Yesterday's Values" rengini "Desired Values" eşiklerine göre
+# DİNAMİK ayarla. Şablondaki eski (demo verisinden kalma, donuk) yeşil/
+# kırmızı renkler yerine artık gerçek karşılaştırma sonucu kullanılıyor.
+# ============================================================
+_GREEN = RGBColor(0x00, 0xB0, 0x50)
+_RED = RGBColor(0xFF, 0x00, 0x00)
+
+
+def _set_run_color(shape, para_idx, run_idx, color):
+    try:
+        shape.text_frame.paragraphs[para_idx].runs[run_idx].font.color.rgb = color
+    except IndexError:
+        pass
+
+
+def color_yesterday_values(slide, m):
+    tb = None
+    for shape in slide.shapes:
+        if shape.name == "TextBox 14":
+            tb = shape
+            break
+    if tb is None:
+        return
+
+    # (para_idx, [run_idx'ler], koşul) — koşul True ise YEŞİL, değilse KIRMIZI
+    checks = [
+        (1, [1], m["avgResponse"] <= 45),                 # Response Time: Max. 45s
+        (2, [1], m["avgDuration"] <= 540),                # Chat Duration: Max. 9m
+        (3, [1], (m["satisfaction"] or 0) >= 4),          # Satisfaction: Min. 4
+        (4, [1, 2], m["avgWaitServed"] <= 40),            # Wait Time (Served): Max. 40s
+        (5, [2, 3], m["avgWaitMissed"] <= 60),            # Wait Time (Missed): Max. 60s
+        (6, [1], m["acceptancePct"] >= 95),                # Acceptance: Min. %95
+    ]
+    for para_idx, run_idxs, ok in checks:
+        for run_idx in run_idxs:
+            _set_run_color(tb, para_idx, run_idx, _GREEN if ok else _RED)
+    # Rated Chats için "Desired Values"ta bir eşik yok — yeşil/kırmızı
+    # yargılamıyoruz, nötr siyaha çekiyoruz (şablondaki eski yeşili miras
+    # almasın diye).
+    _set_run_color(tb, 7, 1, RGBColor(0x00, 0x00, 0x00))
+
+
+# ============================================================
+# TABLE FILL (Slide 8 — Top 10 Tags table)
+# ============================================================
+def fill_top_tags_table(slide, top_tags):
+    table_shape = None
+    for shape in slide.shapes:
+        if shape.has_table:
+            table_shape = shape
+            break
+    if table_shape is None:
+        return
+    table = table_shape.table
+
+    # Orijinal kolon genişlikleri (1.94" tag adı + 0.94" sayı) uzun tag
+    # isimlerinde ("casino_private_bonus_query" gibi) satır taşmasına
+    # sebep oluyordu. Genişletip fontu da biraz küçültüyoruz.
+    col0_width, col1_width = Inches(3.1), Inches(0.9)
+    table.columns[0].width = col0_width
+    table.columns[1].width = col1_width
+    table_shape.width = col0_width + col1_width
+
+    for i, (tag, count) in enumerate(top_tags):
+        if i >= len(table.rows):
+            break
+        for col, text in ((0, tag), (1, str(count))):
+            cell = table.cell(i, col)
+            cell.text_frame.word_wrap = False
+            cell.text_frame.text = text
+            for para in cell.text_frame.paragraphs:
+                for run in para.runs:
+                    run.font.size = Pt(10)
+
+
+# ============================================================
+# MAIN BUILD FUNCTION
+# ============================================================
+def build_pptx(metrics, template_path, out_path, date_label):
+    prs = Presentation(template_path)
+    m = metrics
+    bmap = m["brandMetrics"]
+    served = m["totalChats"] - m["missed"]
+
+    # ---- text tokens ----
+    peak = m["peakHours"][0] if m["peakHours"] else {"hour": 0, "count": 0, "missed": 0, "acceptancePct": 0}
+    if peak.get("missed", 0) > 0:
+        note = (f'En yüksek missed chat sayısı {peak["hour"]:02d}:00–{(peak["hour"]+1)%24:02d}:00 '
+                f'arasında görüldü ({fmt_n(peak["missed"])} chat kaçtı, kabul oranı %{fmt_pct(peak["acceptancePct"])}).')
+    else:
+        note = (f'En yoğun saat aralığı {peak["hour"]:02d}:00–{(peak["hour"]+1)%24:02d}:00 '
+                f'oldu ({fmt_n(peak["count"])} chat). Missed chat görülmedi.')
+
+    tokens = {
+        "{{REPORT_DATE}}": date_label,
+        "{{S2_TOTAL}}": fmt_n(m["totalChats"]),
+        "{{S2_SERVED}}": fmt_n(served),
+        "{{S2_MISSED}}": fmt_n(m["missed"]),
+        "{{S2_SUCCESS}}": fmt_pct(m["acceptancePct"]),
+        "{{S2_NOTE}}": note,
+        "{{S3_RESPONSE}}": str(round(m["avgResponse"])),
+        "{{S3_FIRST_RESPONSE}}": f'{round(m["avgFirstResponse"])}s',
+        "{{S3_WAIT}}": fmt_min_sec(m["avgWaitServed"]),
+        "{{S3_DURATION}}": fmt_min_sec(m["avgDuration"]),
+        "{{S4_BOT_ONLY}}": fmt_n(m["botOnly"]),
+        "{{S4_BOT_TO_AGENT}}": fmt_n(m["botToAgent"]),
+        "{{S4_BOT_PCT}}": fmt_pct(
+            round(m["botOnly"] / (m["botOnly"] + m["botToAgent"]) * 100, 2)
+            if (m["botOnly"] + m["botToAgent"]) else 0
+        ),
+        "{{S4_ACTION_USAGE}}": fmt_n(m["actionUsage"]),
+        "{{S4_ACTION_PER_CHAT}}": f'{m["actionPerChat"]:.2f}'.replace(".", ","),
+    }
+
+    for i, brand in enumerate(["superbetin", "betsat", "turkbet"]):
+        prefix = f"S{5+i}"
+        d = bmap[brand]
+        tokens[f"{{{{{prefix}_TOTAL}}}}"] = fmt_n(d["total"])
+        tokens[f"{{{{{prefix}_SERVED}}}}"] = fmt_n(d["served"])
+        tokens[f"{{{{{prefix}_MISSED}}}}"] = fmt_n(d["missed"])
+        tokens[f"{{{{{prefix}_SUCCESS}}}}"] = fmt_pct(d["accPct"])
+        tokens[f"{{{{{prefix}_BOT_ONLY}}}}"] = fmt_n(d["botOnly"])
+        tokens[f"{{{{{prefix}_BOT_TO_AGENT}}}}"] = fmt_n(d["botToAgent"])
+        tokens[f"{{{{{prefix}_BOT_PCT}}}}"] = fmt_pct(
+            round(d["botOnly"] / (d["botOnly"] + d["botToAgent"]) * 100, 2)
+            if (d["botOnly"] + d["botToAgent"]) else 0
+        )
+
+    # ---- Slide 2 hour boxes: en kötü 3 saat, artık tam veriyle ----
+    top3 = m["peakHours"][:3] if m["peakHours"] else []
+    while len(top3) < 3:
+        top3.append({"hour": 0, "count": 0, "served": 0, "missed": 0, "acceptancePct": 0, "agents": 0})
+    for i, h in enumerate(top3, start=1):
+        prefix = f"S2_H{i}"
+        cpa = round(h["count"] / h["agents"]) if h.get("agents") else 0
+        tokens[f"{{{{{prefix}_HSTART}}}}"] = f'{h["hour"]:02d}'
+        tokens[f"{{{{{prefix}_HEND}}}}"] = f'{(h["hour"]+1)%24:02d}'
+        tokens[f"{{{{{prefix}_TOTAL}}}}"] = fmt_n(h["count"])
+        tokens[f"{{{{{prefix}_SERVED}}}}"] = fmt_n(h.get("served", 0))
+        tokens[f"{{{{{prefix}_MISSED}}}}"] = fmt_n(h.get("missed", 0))
+        tokens[f"{{{{{prefix}_SUCCESS}}}}"] = fmt_pct(h.get("acceptancePct", 0))
+        tokens[f"{{{{{prefix}_AGENTS}}}}"] = str(h.get("agents", 0))
+        tokens[f"{{{{{prefix}_CPA}}}}"] = str(cpa)
+
+    # ---- Slide 9: "Yesterday's Values" (elimizdeki veriyle otomatik) ----
+    tokens["{{S9_RESPONSE}}"] = f'{round(m["avgResponse"])}s'
+    tokens["{{S9_DURATION}}"] = fmt_min_sec(m["avgDuration"])
+    tokens["{{S9_SATISFACTION}}"] = (
+        f'{m["satisfaction"]:.2f}'.replace(".", ",") if m.get("satisfaction") is not None else "—"
+    )
+    tokens["{{S9_WAIT_SERVED}}"] = fmt_min_sec(m["avgWaitServed"])
+    tokens["{{S9_WAIT_MISSED}}"] = fmt_min_sec(m["avgWaitMissed"])
+    tokens["{{S9_ACCEPTANCE}}"] = fmt_pct(m["acceptancePct"]) + "%"
+    tokens["{{S9_RATED_PCT}}"] = fmt_pct(m["ratedPct"]) + "%"
+
+    # ---- Slide 9: E-mail (Zendesk) + Call Statistics (call panel) — elimizde
+    # yok, manuel doldurulacak şekilde boş bırakılıyor ----
+    blank_tokens = [
+        "S9_EMAIL_SB_COUNT", "S9_EMAIL_SB_TIME", "S9_EMAIL_BS_COUNT", "S9_EMAIL_BS_TIME",
+        "S9_EMAIL_TB_COUNT", "S9_EMAIL_TB_TIME",
+        "S9_CALL_BS_ATTEMPTS", "S9_CALL_BS_REACHED", "S9_CALL_BS_REACHED_PCT",
+        "S9_CALL_BS_NOTREACHED", "S9_CALL_BS_NOTREACHED_PCT",
+        "S9_CALL_SB_ATTEMPTS", "S9_CALL_SB_REACHED", "S9_CALL_SB_REACHED_PCT",
+        "S9_CALL_SB_NOTREACHED", "S9_CALL_SB_NOTREACHED_PCT",
+        "S9_CALL_TB_ATTEMPTS", "S9_CALL_TB_REACHED", "S9_CALL_TB_REACHED_PCT",
+        "S9_CALL_TB_NOTREACHED", "S9_CALL_TB_NOTREACHED_PCT",
+    ]
+    for t in blank_tokens:
+        tokens["{{" + t + "}}"] = "—"
+
+    replace_all_tokens(prs, tokens)
+    color_yesterday_values(prs.slides[8], m)
+    add_slide2_kpi_cards(prs.slides[1], m)
+
+    # ---- Slide 8: Top 10 Tags table ----
+    fill_top_tags_table(prs.slides[7], m["topTags"])
+
+    # ---- Charts ----
+    replace_picture(prs.slides[1], "Picture 5",
+                     build_hourly_volume_chart(m["hourlyDist"], "Chats by Hour", figsize=(10.63, 3.57)),
+                     0.01, 1.52, 10.63, 3.57)
+    replace_picture(prs.slides[3], "Picture 8",
+                     build_chatbot_chart(m["botOnly"], m["botToAgent"], figsize=(10.67, 3.67)),
+                     0.00, 1.90, 10.67, 3.67)
+    replace_picture(prs.slides[7], "Picture 4",
+                     build_brand_tag_donuts(m.get("brandTagMap", {}), figsize=(11.10, 2.98)),
+                     0.85, 1.30, 11.10, 2.98)
+
+    brand_hourly = m.get("brandHourly", {})
+    replace_picture(prs.slides[4], "Picture 10",
+                     build_hourly_volume_chart(brand_hourly.get("superbetin", []), "Superbetin — Chats by Hour", figsize=(10.71, 3.57), served_color=BRAND_COLORS["superbetin"]),
+                     0.00, 1.37, 10.71, 3.57)
+    replace_picture(prs.slides[5], "Picture 4",
+                     build_hourly_volume_chart(brand_hourly.get("betsat", []), "Betsat — Chats by Hour", figsize=(10.47, 3.54), served_color=BRAND_COLORS["betsat"]),
+                     -0.00, 1.31, 10.47, 3.54)
+    replace_picture(prs.slides[6], "Picture 5",
+                     build_hourly_volume_chart(brand_hourly.get("turkbet", []), "Turkbet — Chats by Hour", figsize=(10.34, 3.50), served_color=BRAND_COLORS["turkbet"]),
+                     0.00, 1.27, 10.34, 3.50)
+
+    prs.save(out_path)
+    return out_path
+
+
+if __name__ == "__main__":
+    import sys
+    import datetime as dt
+    sys.path.insert(0, ".")
+    from fetch_metrics import build_metrics
+
+    date_str = sys.argv[1] if len(sys.argv) > 1 else dt.date.today().isoformat()
+    metrics = build_metrics(date_str)
+    date_label = dt.datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%Y")
+    out = build_pptx(metrics, "template.pptx", f"CS_Team_daily_chat_stats_{date_label.replace('.', '_')}.pptx", date_label)
+    print("Saved:", out)
