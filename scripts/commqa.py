@@ -13,6 +13,9 @@
 #     sola hizalı başlığa düşer), veri alanı biçimi her yazımda sıfırlanır,
 #     WRAP sadece User Comment'te, sütun genişlikleri iki sayfada aynı.
 #     Hücre değerleri / sütun ve satır düzeni / sekme adları / filtre aynı.
+# v6: fetch erken durur — hedef gün bittikten sonra art arda 3 sayfa hedef güne
+#     ait chat yoksa taramayı keser (süre ~220 sn -> ~80 sn, yalancı "70 sayfa
+#     limiti" uyarısı kalktı). Gerçek limit çarpması uyarısı aynen duruyor.
 # ============================================================
 
 import os
@@ -301,6 +304,8 @@ def fetch_all_chats(date_str):
     seen   = set()
     page   = 1
     MAX_PAGES = 70  # güvenlik tavanı — 18k+ chat'lik günlerde bile geniş pay bırakır
+    EMPTY_STOP = 3  # hedef gün bulunduktan sonra art arda bu kadar sayfa bugün-boş gelirse dur
+    empty_run  = 0
     base   = (
         f"https://dash15.lively-chat.com/api/LiveChat/chats:search"
         f"?siteId={SITE_ID}"
@@ -355,6 +360,15 @@ def fetch_all_chats(date_str):
             if page_after > 0 and page_in == 0 and len(result) > 0:
                 print("[FETCH] Hedef tarih geçildi, durduruluyor.")
                 break
+            # Hedef gün bulundu ve art arda EMPTY_STOP sayfa boyunca hedef güne ait chat yok
+            # (listede daha eski günlere geçilmiş) -> kalan sayfaları çekmeye gerek yok
+            if len(result) > 0 and page_in == 0:
+                empty_run += 1
+                if empty_run >= EMPTY_STOP:
+                    print(f"[FETCH] Hedef gün bitti ({EMPTY_STOP} boş sayfa), durduruluyor.")
+                    break
+            else:
+                empty_run = 0
             if len(chats) < 500:
                 break
             page += 1
