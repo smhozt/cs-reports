@@ -64,12 +64,13 @@ GCP_CREDS_JSON = os.environ["GCP_CREDENTIALS"]
 CS_DEPT_ID = "29098b6e-0acb-40cc-8cd7-ebf662defc42"
 
 # Sheet'teki sekme sırası: All Brands, Betsat, Superbetin, Turkbet
+# Marka başına kampanya ID LİSTESİ (eski + yeni). Turkbet kopyası açılınca yeni ID'yi ekle, eskiyi SİLME (geçmiş sohbetler eski ID'de).
 CAMPAIGNS = {
-    "Superbetin": "3cd6532a-0d60-4d7d-9331-5dd5be71f527",
-    "Betsat":     "2b71ad44-6a12-4073-bc6c-8edb22eabcc6",
-    "Turkbet":    "6712311a-2268-408c-a803-b338a1308010",
+    "Superbetin": ["3cd6532a-0d60-4d7d-9331-5dd5be71f527", "2c1c5c27-4f31-4ee6-90f6-1da8747e6786"],
+    "Betsat":     ["2b71ad44-6a12-4073-bc6c-8edb22eabcc6", "ec7a1e4d-0822-4682-a25f-e7a2b29637f8"],
+    "Turkbet":    ["6712311a-2268-408c-a803-b338a1308010"],
 }
-CAMPAIGN_TO_BRAND = {v.lower(): k for k, v in CAMPAIGNS.items()}
+CAMPAIGN_TO_BRAND = {i.lower(): k for k, ids in CAMPAIGNS.items() for i in ids}
 BRAND_ORDER = ["Betsat", "Superbetin", "Turkbet"]
 ALL_PREFIX  = "TAGs All Brands"
 TAB_KINDS   = [ALL_PREFIX] + BRAND_ORDER
