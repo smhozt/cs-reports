@@ -66,11 +66,12 @@ CS_DEPT = "29098b6e-0acb-40cc-8cd7-ebf662defc42"
 VIP_DEPT = "433cb80f-4e0d-4e6d-96d3-bff700296a6f"
 DEPTS = {"cs": [CS_DEPT], "cs_vip": [CS_DEPT, VIP_DEPT], "all": None}
 
-# (kod, şablon sekmesi, Comm100 CampaignId)
+# (kod, şablon sekmesi, Comm100 CampaignId LİSTESİ: eski + yeni "Copy:" kampanya)
+# Eski chat'ler eski ID'yi taşıdığı için eskileri SİLME. Turkbet kopyası açılınca yeni ID'yi listeye ekle.
 BRANDS = [
-    ("SB", "SUPERBETIN", "3cd6532a-0d60-4d7d-9331-5dd5be71f527"),
-    ("BS", "BETSAT", "2b71ad44-6a12-4073-bc6c-8edb22eabcc6"),
-    ("TB", "TURKBET", "6712311a-2268-408c-a803-b338a1308010"),
+    ("SB", "SUPERBETIN", ["3cd6532a-0d60-4d7d-9331-5dd5be71f527", "2c1c5c27-4f31-4ee6-90f6-1da8747e6786"]),
+    ("BS", "BETSAT", ["2b71ad44-6a12-4073-bc6c-8edb22eabcc6", "ec7a1e4d-0822-4682-a25f-e7a2b29637f8"]),
+    ("TB", "TURKBET", ["6712311a-2268-408c-a803-b338a1308010"]),
 ]
 
 GOALS_TAB = "Goals_Günlük"
@@ -217,7 +218,7 @@ def p_volume_bot(ws, we, camp):
                                        cnd("ChatType", "ChatType", "equals", ["1"])]),
     ]
     return wrap(fields, [flt("RequestedTime", "between", [dstr(ws), dstr(we)]),
-                         flt("CampaignId", "equals", [camp])])
+                         flt("CampaignId", "equals", list(camp))])
 
 def p_rating(ws, we, camp=None, dept_ids=None, chat_types=("0", "2"), statuses=("0",)):
     fields = [{"name": "ratingTimes", "calculationType": "count", "valueType": "int",
@@ -234,7 +235,7 @@ def p_rating(ws, we, camp=None, dept_ids=None, chat_types=("0", "2"), statuses=(
     if statuses:
         filters.append(flt("Status", "equals", list(statuses)))
     if camp:
-        filters.append(flt("CampaignId", "equals", [camp]))
+        filters.append(flt("CampaignId", "equals", list(camp)))
     filters += dept_filter(dept_ids)
     return wrap(fields, filters)
 
@@ -306,7 +307,7 @@ def p_chat_dur(ws, we, camp, chat_types, statuses):
         f_count("n", "Id", [cnd("Status", "Status", "equals", list(statuses)),
                             cnd("ChatType", "ChatType", "equals", list(chat_types))]),
     ]
-    return wrap(fields, [flt("RequestedTime", "between", [dstr(ws), dstr(we)]), flt("CampaignId", "equals", [camp]),
+    return wrap(fields, [flt("RequestedTime", "between", [dstr(ws), dstr(we)]), flt("CampaignId", "equals", list(camp)),
                          flt("Duration", "greaterThan", ["0"]),
                          flt("ChatType", "equals", list(chat_types)), flt("Status", "equals", list(statuses))])
 
