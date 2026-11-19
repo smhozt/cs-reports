@@ -561,12 +561,27 @@ def get_real_username(c):
     return name if name is not None else extract_real_username(c)
 
 # ── BRAND (Comm100 campaign) ─────────────────────────────────
-def get_brand_key(c):
-    """Markayı ayırt eden anahtar: campaign id (yoksa "")."""
+# Kampanya kopyalari: yeni ID -> eski (kanonik) ID. Ayni marka tek grup sayilsin.
+# Turkbet kopyasi acilinca buraya ekle (eskiyi SILME).
+CAMPAIGN_ALIAS = {
+    "2c1c5c27-4f31-4ee6-90f6-1da8747e6786": "3cd6532a-0d60-4d7d-9331-5dd5be71f527",  # Superbetin (yeni -> eski)
+    "ec7a1e4d-0822-4682-a25f-e7a2b29637f8": "2b71ad44-6a12-4073-bc6c-8edb22eabcc6",  # BetSat (yeni -> eski)
+}
+CAMPAIGN_ALIAS_NAME = {"3cd6532a-0d60-4d7d-9331-5dd5be71f527": "Superbetin", "2b71ad44-6a12-4073-bc6c-8edb22eabcc6": "BetSat"}  # kanonik ID -> gorunen ad
+
+def _raw_campaign_id(c):
     return str(c.get("campaignId") or (c.get("campaign") or {}).get("id") or "")
 
+def get_brand_key(c):
+    """Markayı ayırt eden anahtar: campaign id (yoksa ""). Kopya kampanyalar eski ID'ye eşlenir."""
+    k = _raw_campaign_id(c)
+    return CAMPAIGN_ALIAS.get(k.lower(), k)
+
 def get_brand(c):
-    """Görünen marka adı: campaign adı; tamamı büyük harfse 'Superbetin' biçimi."""
+    """Görünen marka adı: campaign adı; tamamı büyük harfse 'Superbetin' biçimi. Kopya kampanyalar kanonik ada eşlenir."""
+    key = get_brand_key(c).lower()
+    if key in CAMPAIGN_ALIAS_NAME:
+        return CAMPAIGN_ALIAS_NAME[key]
     name = str((c.get("campaign") or {}).get("name") or c.get("_brand") or "").strip()
     return name.title() if name.isupper() else name
 
