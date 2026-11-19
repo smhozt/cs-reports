@@ -32,10 +32,12 @@ REPORT_EMAILS = [e.strip() for e in os.environ["REPORT_EMAILS"].split(",")]
 
 CS_DEPT_ID = "29098b6e-0acb-40cc-8cd7-ebf662defc42"
 
+# Marka basina kampanya ID listesi (eski + yeni "Copy:" kampanya).
+# Eski chat'ler eski ID'yi tasidigi icin eskileri SILME. Turkbet kopyasi acilinca yeni ID'yi listeye ekle.
 CAMPAIGNS = {
-    "SB": "3cd6532a-0d60-4d7d-9331-5dd5be71f527",
-    "BS": "2b71ad44-6a12-4073-bc6c-8edb22eabcc6",
-    "TB": "6712311a-2268-408c-a803-b338a1308010"
+    "SB": ["3cd6532a-0d60-4d7d-9331-5dd5be71f527", "2c1c5c27-4f31-4ee6-90f6-1da8747e6786"],
+    "BS": ["2b71ad44-6a12-4073-bc6c-8edb22eabcc6", "ec7a1e4d-0822-4682-a25f-e7a2b29637f8"],
+    "TB": ["6712311a-2268-408c-a803-b338a1308010"]
 }
 
 QA_TAGS = [
@@ -219,8 +221,8 @@ def get_agent_name(chat):
 
 def get_brand(chat):
     cid = (chat.get("campaignId") or "").lower()
-    for brand, camp_id in CAMPAIGNS.items():
-        if cid == camp_id.lower():
+    for brand, camp_ids in CAMPAIGNS.items():
+        if cid in [c.lower() for c in camp_ids]:
             return brand
     url = (chat.get("requestingPageURL") or "").lower()
     if "superbetin" in url: return "SB"
