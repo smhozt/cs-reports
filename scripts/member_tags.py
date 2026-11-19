@@ -54,10 +54,12 @@ DEPT_NAMES = {
     VIP_DEPT_ID.lower(): "VIP",
 }
 
+# Marka → Comm100 kampanya ID listesi (eski + yeni "Copy:" kampanya).
+# Eski chat'ler eski ID'yi taşıdığı için eskileri SİLME. Turkbet kopyası açılınca yeni ID'yi listeye ekle.
 CAMPAIGNS = {
-    "SB": "3cd6532a-0d60-4d7d-9331-5dd5be71f527",
-    "BS": "2b71ad44-6a12-4073-bc6c-8edb22eabcc6",
-    "TB": "6712311a-2268-408c-a803-b338a1308010",
+    "SB": ["3cd6532a-0d60-4d7d-9331-5dd5be71f527", "2c1c5c27-4f31-4ee6-90f6-1da8747e6786"],
+    "BS": ["2b71ad44-6a12-4073-bc6c-8edb22eabcc6", "ec7a1e4d-0822-4682-a25f-e7a2b29637f8"],
+    "TB": ["6712311a-2268-408c-a803-b338a1308010"],
 }
 
 # Custom Variable alanları (ad soneki ile de bulunur — id değişirse bozulmaz)
@@ -393,8 +395,8 @@ def attach_member_fields(chats):
 # ── CHAT → ALANLAR ───────────────────────────────────────────
 def get_brand(c):
     cid = str(c.get("campaignId") or (c.get("campaign") or {}).get("id") or "").lower()
-    for brand, camp_id in CAMPAIGNS.items():
-        if cid == camp_id.lower():
+    for brand, camp_ids in CAMPAIGNS.items():
+        if cid in [x.lower() for x in camp_ids]:
             return brand
     name = str((c.get("campaign") or {}).get("name") or "").lower()
     for key, brand in (("superbetin", "SB"), ("betsat", "BS"), ("turkbet", "TB")):
