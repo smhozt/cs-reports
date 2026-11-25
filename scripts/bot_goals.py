@@ -67,7 +67,7 @@ if os.environ.get("BOT_IDS_JSON"):
 GOALS = [
     "ac_open_request", "affiliate", "betting_rules_query", "birthday_bonus_query",
     "boosted_odds_query", "cashout_issue", "casino_cashback_query", "casino_instant_cashback",
-    "casino_issue", "contacts", "deposit_bonus_query", "deposit_check_query", "deposit_issue",
+    "casino_issue", "contacts", "deposit_bonus_query", "deposit_check_query", "deposit_delayed", "deposit_issue",
     "deposit_missing", "deposit_query", "docs_query", "fake_site", "fdb_query", "free_spin_query",
     "game_result_query", "game_rules_query", "general_info", "live_chat_ban", "login_request",
     "personal_data_change", "raf_bonus_query", "registration_query", "settlement_query",
