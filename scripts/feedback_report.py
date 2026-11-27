@@ -3,6 +3,8 @@
 # CS FEEDBACK AI REPORT — GitHub Actions
 # Google Sheets'ten feedback verilerini çekip AI ile analiz eder
 # Email raporu gönderir
+# v: güncel fiyat tablosu + merkezi maliyet hesabı (calc_cost), Gemini thinking token'ları
+#    output'a dahil, footer "Developed by Erhan Smith"
 # v: AKSIYON KURALI prompt satırı kaldırıldı (actions hiçbir yerde render edilmiyordu, gereksiz talimattı)
 # ============================================================
 
@@ -35,6 +37,22 @@ gemini_key_index = 0
 
 TR_MONTHS = ["Ocak","Subat","Mart","Nisan","Mayis","Haziran",
              "Temmuz","Agustos","Eylul","Ekim","Kasim","Aralik"]
+
+# ── FİYATLAR (USD / 1M token) ────────────────────────────────
+# Kaynak: Google AI / Anthropic / Groq resmi fiyat sayfaları (Kasım 2026)
+# Gemini 2.0 Flash fiyatı resmi sayfadan teyit edilemedi (Vertex: 0.15/0.60) — fallback modeli, nadiren devreye girer.
+AI_PRICES = {
+    "Gemini 2.5 Flash":   {"in": 0.30, "out": 2.50},
+    "Gemini 2.0 Flash":   {"in": 0.10, "out": 0.40},
+    "Claude Haiku 4.5":   {"in": 1.00, "out": 5.00},
+    "Groq Llama-4 Scout": {"in": 0.11, "out": 0.34},
+}
+
+def calc_cost(model_name, in_t, out_t):
+    p = AI_PRICES.get(model_name)
+    if not p:
+        return 0.0
+    return (in_t * p["in"] + out_t * p["out"]) / 1_000_000
 
 # ── DATE HELPERS ─────────────────────────────────────────────
 def get_sofia_today():
@@ -304,9 +322,10 @@ def try_gemini(prompt):
                         gemini_key_index = (gemini_key_index + ki + 1) % len(GEMINI_KEYS)
                         usage  = res.get("usageMetadata", {})
                         in_t   = usage.get("promptTokenCount", 0)
-                        out_t  = usage.get("candidatesTokenCount", 0)
-                        cost   = (in_t * 0.075 / 1_000_000) + (out_t * 0.30 / 1_000_000)
+                        # Faturalanan output = yanıt token'ları + düşünme (thinking) token'ları
+                        out_t  = usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0)
                         model_name = "Gemini 2.5 Flash" if "2.5" in model else "Gemini 2.0 Flash"
+                        cost   = calc_cost(model_name, in_t, out_t)
                         print(f"[AI] {model_name} | {in_t}+{out_t} token | ${cost:.6f}")
                         return {"success": True, "text": text, "model": model_name,
                                 "in_tokens": in_t, "out_tokens": out_t, "cost": cost}
@@ -334,7 +353,7 @@ def try_claude(prompt):
             text = res["content"][0]["text"].strip()
             in_t  = res.get("usage", {}).get("input_tokens",  0)
             out_t = res.get("usage", {}).get("output_tokens", 0)
-            cost  = (in_t * 0.25 / 1_000_000) + (out_t * 1.25 / 1_000_000)
+            cost  = calc_cost("Claude Haiku 4.5", in_t, out_t)
             print(f"[AI] Claude Haiku | {in_t}+{out_t} token | ${cost:.6f}")
             return {"success": True, "text": text, "model": "Claude Haiku 4.5",
                     "in_tokens": in_t, "out_tokens": out_t, "cost": cost}
@@ -358,7 +377,7 @@ def try_groq(prompt):
                 text = res["choices"][0]["message"]["content"].strip()
                 in_t  = res.get("usage", {}).get("prompt_tokens",     0)
                 out_t = res.get("usage", {}).get("completion_tokens", 0)
-                cost  = (in_t * 0.11 / 1_000_000) + (out_t * 0.34 / 1_000_000)
+                cost  = calc_cost("Groq Llama-4 Scout", in_t, out_t)
                 print(f"[AI] Groq | {in_t}+{out_t} token | ${cost:.6f}")
                 return {"success": True, "text": text, "model": "Groq Llama-4 Scout",
                         "in_tokens": in_t, "out_tokens": out_t, "cost": cost}
@@ -613,7 +632,7 @@ def build_daily_html(metrics, ai, date_label, ai_usage):
 <td style="padding:14px 28px;background-color:{C["dark"]};" bgcolor="{C["dark"]}">
   <p style="margin:0;font-size:11px;color:{C["yellow"]};font-weight:700;text-align:center;font-family:Montserrat,Arial,sans-serif;">CS Feedback AI Report &nbsp;&middot;&nbsp; Gunluk</p>
   {token_line}
-  <p style="margin:4px 0 0;font-size:10px;color:{C["lavanta"]};text-align:center;font-family:Montserrat,Arial,sans-serif;">Developed by Erhan</p>
+  <p style="margin:4px 0 0;font-size:10px;color:{C["lavanta"]};text-align:center;font-family:Montserrat,Arial,sans-serif;">Developed by Erhan Smith</p>
 </td></tr></table>
 
 </td></tr></table>
@@ -731,7 +750,7 @@ def build_weekly_html(metrics, ai, week_label, breakdown, ai_usage):
 <td style="padding:14px 28px;background-color:{C["dark"]};" bgcolor="{C["dark"]}">
   <p style="margin:0;font-size:11px;color:{C["yellow"]};font-weight:700;text-align:center;font-family:Montserrat,Arial,sans-serif;">CS Feedback AI Report &nbsp;&middot;&nbsp; Haftalik</p>
   {token_line}
-  <p style="margin:4px 0 0;font-size:10px;color:{C["lavanta"]};text-align:center;font-family:Montserrat,Arial,sans-serif;">Developed by Erhan</p>
+  <p style="margin:4px 0 0;font-size:10px;color:{C["lavanta"]};text-align:center;font-family:Montserrat,Arial,sans-serif;">Developed by Erhan Smith</p>
 </td></tr></table>
 
 </td></tr></table>
@@ -1050,7 +1069,7 @@ def build_weekly_short_html(metrics, ai, week_label, breakdown, ai_usage):
 <td style="padding:14px 28px;background-color:{C["dark"]};" bgcolor="{C["dark"]}">
   <p style="margin:0;font-size:11px;color:{C["yellow"]};font-weight:700;text-align:center;font-family:Montserrat,Arial,sans-serif;">CS Feedback AI Report &nbsp;&middot;&nbsp; Haftalik</p>
   {token_line}
-  <p style="margin:4px 0 0;font-size:10px;color:{C["lavanta"]};text-align:center;font-family:Montserrat,Arial,sans-serif;">Developed by Erhan</p>
+  <p style="margin:4px 0 0;font-size:10px;color:{C["lavanta"]};text-align:center;font-family:Montserrat,Arial,sans-serif;">Developed by Erhan Smith</p>
 </td></tr></table>
 </td></tr></table>
 </td></tr></table>
