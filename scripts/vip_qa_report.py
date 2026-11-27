@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # ============================================================
-# VIP QA & AI REPORT — GitHub Actions Port (v1)
+# VIP QA & AI REPORT — GitHub Actions Port (v2)
 # GAS "VIP QA Report V69" scriptinin Python/Actions karşılığı.
+#
+# v2: güncel fiyat tablosu + merkezi maliyet hesabı (calc_cost),
+#     Gemini thinking token'ları output'a dahil, mail footer'ında
+#     model bazlı input/output token + maliyet, "Developed by Erhan Smith"
 #
 # Neden taşındı:
 #   Apps Script'in 6 dakikalık sert zaman aşımı limiti try/catch ile
@@ -59,6 +63,22 @@ TR_MONTHS = ["Ocak","Subat","Mart","Nisan","Mayis","Haziran",
              "Temmuz","Agustos","Eylul","Ekim","Kasim","Aralik"]
 
 gemini_key_index = 0
+
+# ── FİYATLAR (USD / 1M token) ────────────────────────────────
+# Kaynak: Google AI / Anthropic / Groq resmi fiyat sayfaları (Kasım 2026)
+# Gemini 2.0 Flash fiyatı resmi sayfadan teyit edilemedi (Vertex: 0.15/0.60) — fallback modeli, nadiren devreye girer.
+AI_PRICES = {
+    "Gemini 2.5 Flash":   {"in": 0.30, "out": 2.50},
+    "Gemini 2.0 Flash":   {"in": 0.10, "out": 0.40},
+    "Claude Haiku 4.5":   {"in": 1.00, "out": 5.00},
+    "Groq Llama-4 Scout": {"in": 0.11, "out": 0.34},
+}
+
+def calc_cost(model_name, in_t, out_t):
+    p = AI_PRICES.get(model_name)
+    if not p:
+        return 0.0
+    return (in_t * p["in"] + out_t * p["out"]) / 1_000_000
 
 # ── DATE HELPERS (commqa.py ile aynı) ────────────────────────
 def sofia_yesterday():
@@ -311,9 +331,11 @@ def try_gemini(prompt):
                         text = cands[0]["content"]["parts"][0]["text"].strip()
                         gemini_key_index = (gemini_key_index + ki + 1) % len(GEMINI_KEYS)
                         usage = res.get("usageMetadata", {})
-                        in_t, out_t = usage.get("promptTokenCount", 0), usage.get("candidatesTokenCount", 0)
-                        cost = (in_t * 0.075 / 1_000_000) + (out_t * 0.30 / 1_000_000)
+                        in_t = usage.get("promptTokenCount", 0)
+                        # Faturalanan output = yanıt token'ları + düşünme (thinking) token'ları
+                        out_t = usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0)
                         model_name = "Gemini 2.5 Flash" if "2.5" in model else "Gemini 2.0 Flash"
+                        cost = calc_cost(model_name, in_t, out_t)
                         print(f"[AI] {model_name} — {in_t}+{out_t} token | ${cost:.6f}")
                         return {"success": True, "text": text, "model": model_name,
                                 "in_tokens": in_t, "out_tokens": out_t, "cost": cost}
@@ -339,7 +361,7 @@ def try_claude(prompt):
             res = r.json()
             in_t  = res.get("usage", {}).get("input_tokens", 0)
             out_t = res.get("usage", {}).get("output_tokens", 0)
-            cost  = (in_t * 0.25 / 1_000_000) + (out_t * 1.25 / 1_000_000)
+            cost  = calc_cost("Claude Haiku 4.5", in_t, out_t)
             print(f"[AI] Claude Haiku 4.5 — {in_t}+{out_t} token | ${cost:.6f}")
             return {"success": True, "text": res["content"][0]["text"].strip(), "model": "Claude Haiku 4.5",
                     "in_tokens": in_t, "out_tokens": out_t, "cost": cost}
@@ -362,7 +384,7 @@ def try_groq(prompt):
                 res = r.json()
                 in_t  = res.get("usage", {}).get("prompt_tokens", 0)
                 out_t = res.get("usage", {}).get("completion_tokens", 0)
-                cost  = (in_t * 0.59 / 1_000_000) + (out_t * 0.79 / 1_000_000)
+                cost  = calc_cost("Groq Llama-4 Scout", in_t, out_t)
                 print(f"[AI] Groq Llama-4 Scout — {in_t}+{out_t} token | ${cost:.6f}")
                 return {"success": True, "text": res["choices"][0]["message"]["content"].strip(),
                         "model": "Groq Llama-4 Scout", "in_tokens": in_t, "out_tokens": out_t, "cost": cost}
@@ -392,7 +414,7 @@ def analyze_with_ai(transcript, rating, tags, agent_name):
 # ── PROCESS ────────────────────────────────────────────────────
 def process_vip_chats(chats):
     m = {"totalScanned": len(chats), "aiAnalyses": [], "inT": 0, "outT": 0,
-         "totalVirtualCost": 0.0, "totalCritical": 0}
+         "totalVirtualCost": 0.0, "totalCritical": 0, "modelStats": {}}
     for c in chats:
         rating   = get_rating(c)
         raw_tags = get_raw_tags(c)
@@ -407,6 +429,12 @@ def process_vip_chats(chats):
                 m["inT"] += ai_res["inT"]
                 m["outT"] += ai_res["outT"]
                 m["totalVirtualCost"] += ai_res["cost"]
+                if ai_res["modelUsed"]:
+                    ms = m["modelStats"].setdefault(ai_res["modelUsed"], {"inT": 0, "outT": 0, "cost": 0.0, "n": 0})
+                    ms["inT"]  += ai_res["inT"]
+                    ms["outT"] += ai_res["outT"]
+                    ms["cost"] += ai_res["cost"]
+                    ms["n"]    += 1
                 clean_tag = "Belirtilmemiş"
                 if raw_tags:
                     import re
@@ -421,6 +449,32 @@ def process_vip_chats(chats):
                 print(f"[AI] {get_visitor(c)} / {agent} → {ai_res['modelUsed'] or 'BAŞARISIZ'}")
                 time.sleep(SLEEP_BETWEEN_ANALYSES)
     return m
+
+# ── FOOTER (model bazlı token + maliyet) ──────────────────────
+def build_footer_html(m):
+    lines = ""
+    stats = m.get("modelStats") or {}
+    for model, s in stats.items():
+        lines += (
+            f"<div style='margin-top:6px; font-size:12px; color:#c4b5fd;'>"
+            f"{model} &nbsp;&middot;&nbsp; {s['inT']:,} input + {s['outT']:,} output token "
+            f"&nbsp;&middot;&nbsp; ${s['cost']:.6f}</div>"
+        )
+    if len(stats) > 1:
+        lines += (
+            f"<div style='margin-top:6px; font-size:12px; color:#c4b5fd; font-weight:bold;'>"
+            f"Toplam &nbsp;&middot;&nbsp; {m['inT']:,} input + {m['outT']:,} output token "
+            f"&nbsp;&middot;&nbsp; ${m['totalVirtualCost']:.6f}</div>"
+        )
+    return (
+        "<tr><td style='background:linear-gradient(135deg, #0f1e36 0%, #1e3a8a 100%); "
+        "padding:22px 30px; text-align:center;'>"
+        "<div style='color:#FFE600; font-size:14px; font-weight:800; letter-spacing:.5px;'>"
+        "VIP QA &amp; AI Alert &nbsp;&middot;&nbsp; G&uuml;nl&uuml;k</div>"
+        f"{lines}"
+        "<div style='margin-top:6px; font-size:11px; color:#a5b4fc;'>Developed by Erhan Smith</div>"
+        "</td></tr>"
+    )
 
 # ── HTML BUILD (orijinal GAS scriptiyle aynı görünüm) ─────────
 def build_html(m, date_label):
@@ -495,6 +549,8 @@ def build_html(m, date_label):
     else:
         critical_note = f"<b>{m['totalCritical']}</b> kritik chat tespit edildi ve tamamı analiz edildi."
 
+    footer_html = build_footer_html(m)
+
     return f"""<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:40px 15px;">
     <table width="950" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 15px 35px rgba(0,0,0,0.05);">
@@ -509,10 +565,8 @@ def build_html(m, date_label):
         <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #fee2e2; border-radius:10px; overflow:hidden; border-collapse:collapse;">
           {rows_html}
         </table>
-        <div style="text-align:center; font-size:13px; color:#9ca3af; margin-top:45px; padding-top:25px; border-top:1px dashed #e5e7eb;">
-          <strong>VIP QA SYSTEM (GitHub Actions)</strong><br>Developed by Erhan
-        </div>
       </td></tr>
+      {footer_html}
     </table>
   </td></tr></table></body></html>"""
 
@@ -638,7 +692,7 @@ def log_to_sheet(date_str, m, duration_sec, status):
                 }]},
             ).execute()
             print("[LOG] Eski header'a 'Durum' kolonu eklendi (I1)")
-        cost_str = f"${float(m.get('totalVirtualCost') or 0):.5f}"
+        cost_str = f"${float(m.get('totalVirtualCost') or 0):.6f}"
         svc.spreadsheets().values().append(
             spreadsheetId=SPREADSHEET_ID, range=f"'{AI_LOGS_SHEET}'!A1",
             valueInputOption="RAW", insertDataOption="INSERT_ROWS",
