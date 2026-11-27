@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # ============================================================
-# COMM100 CHAT ANALYZER — v6
-# fix: parse_json hata loglama + Claude JSON prefill + Groq boş
-#      key guard + AI analizi başarısız olduğunda email'de görünür uyarı
+# COMM100 CHAT ANALYZER — v7
+# v7: güncel fiyat tablosu + merkezi maliyet hesabı (calc_cost),
+#     Gemini thinking token'ları output'a dahil, footer "Developed by Erhan Smith"
+# v6: parse_json hata loglama + Claude JSON prefill + Groq boş
+#     key guard + AI analizi başarısız olduğunda email'de görünür uyarı
 # ============================================================
 
 import os
@@ -48,6 +50,25 @@ QA_TAGS = [
 ]
 
 gemini_key_index = 0
+
+# ── FİYATLAR (USD / 1M token) ────────────────────────────────
+# Kaynak: Google AI / Anthropic / Groq resmi fiyat sayfaları (Kasım 2026)
+# Gemini 3.6 Flash: tanıtım fiyatı $0.75/$3.75 (31 Aralık 2026'ya kadar), 1 Ocak 2027'den itibaren $1.50/$7.50
+AI_PRICES = {
+    "Gemini 2.5 Flash":   {"in": 0.30, "out": 2.50},
+    "Gemini 3.6 Flash":   {"in": 0.75, "out": 3.75},
+    "Claude Haiku 4.5":   {"in": 1.00, "out": 5.00},
+    "Groq Llama-4 Scout": {"in": 0.11, "out": 0.34},
+}
+
+def calc_cost(model_name, in_t, out_t):
+    p = AI_PRICES.get(model_name)
+    if not p:
+        return 0.0
+    in_p, out_p = p["in"], p["out"]
+    if model_name == "Gemini 3.6 Flash" and datetime.utcnow() >= datetime(2027, 1, 1):
+        in_p, out_p = 1.50, 7.50
+    return (in_t * in_p + out_t * out_p) / 1_000_000
 
 # ── AUTH ─────────────────────────────────────────────────────
 def get_auth():
@@ -454,9 +475,11 @@ def try_gemini(prompt):
                         text = cands[0]["content"]["parts"][0]["text"].strip()
                         gemini_key_index = (gemini_key_index + ki + 1) % len(GEMINI_KEYS)
                         model_name = "Gemini 2.5 Flash" if "2.5" in model else "Gemini 3.6 Flash"
-                        in_t  = res.get("usageMetadata", {}).get("promptTokenCount", 0)
-                        out_t = res.get("usageMetadata", {}).get("candidatesTokenCount", 0)
-                        cost  = (in_t * 0.075 / 1_000_000) + (out_t * 0.30 / 1_000_000)
+                        um    = res.get("usageMetadata", {})
+                        in_t  = um.get("promptTokenCount", 0)
+                        # Faturalanan output = yanıt token'ları + düşünme (thinking) token'ları
+                        out_t = um.get("candidatesTokenCount", 0) + um.get("thoughtsTokenCount", 0)
+                        cost  = calc_cost(model_name, in_t, out_t)
                         print(f"[AI] {model_name} — {in_t}+{out_t} token | ${cost:.6f}")
                         return {"success": True, "text": text, "model": model_name,
                                 "in_tokens": in_t, "out_tokens": out_t, "cost": cost}
@@ -497,7 +520,7 @@ def try_claude(prompt):
             text  = "{" + res["content"][0]["text"].strip()
             in_t  = res.get("usage", {}).get("input_tokens", 0)
             out_t = res.get("usage", {}).get("output_tokens", 0)
-            cost  = (in_t * 0.25 / 1_000_000) + (out_t * 1.25 / 1_000_000)
+            cost  = calc_cost("Claude Haiku 4.5", in_t, out_t)
             print(f"[AI] Claude Haiku — {in_t}+{out_t} token | ${cost:.6f}")
             return {"success": True, "text": text, "model": "Claude Haiku 4.5",
                     "in_tokens": in_t, "out_tokens": out_t, "cost": cost}
@@ -528,7 +551,7 @@ def try_groq(prompt):
                 text  = res["choices"][0]["message"]["content"].strip()
                 in_t  = res.get("usage", {}).get("prompt_tokens", 0)
                 out_t = res.get("usage", {}).get("completion_tokens", 0)
-                cost  = (in_t * 0.11 / 1_000_000) + (out_t * 0.34 / 1_000_000)
+                cost  = calc_cost("Groq Llama-4 Scout", in_t, out_t)
                 print(f"[AI] Groq — {in_t}+{out_t} token | ${cost:.6f}")
                 return {"success": True, "text": text, "model": "Groq Llama-4 Scout",
                         "in_tokens": in_t, "out_tokens": out_t, "cost": cost}
@@ -803,7 +826,7 @@ def build_html(ai_data, stats, date_str, model_used, ai_usage=None, ai_failed=Fa
      font-family:Montserrat,Arial,sans-serif;">Chat Analyzer &nbsp;&middot;&nbsp; CS Günlük</p>
   {token_line}
   <p style="margin:4px 0 0;font-size:10px;color:#B28ABF;text-align:center;
-     font-family:Montserrat,Arial,sans-serif;">Developed by Erhan</p>
+     font-family:Montserrat,Arial,sans-serif;">Developed by Erhan Smith</p>
 </td></tr></table>
 
 </td></tr></table>
